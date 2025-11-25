@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+streamlit
+pandas
+numpy
+scikit-learn
+joblib
+yfinance
+tensorflow
+matplotlib
+requests
