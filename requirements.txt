@@ -9,3 +9,5 @@ yfinance
 tensorflow
 matplotlib
 requests
+plotly
+python-multipart
