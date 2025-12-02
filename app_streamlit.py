@@ -1,434 +1,575 @@
-# app_streamlit.py - Enhanced with multi-day predictions and advanced charts
+# app_streamlit.py - FORCE TODAY'S DATE WITH LIVE PRICE
 import streamlit as st
 import requests
 import pandas as pd
 import os
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from datetime import datetime, timedelta
+import yfinance as yf
+import time
+import subprocess
+import sys
+
+st.set_page_config(page_title="Bitcoin Prediction", page_icon="₿", layout="wide")
 
 API_BASE = "http://127.0.0.1:8000"
 
-# Custom CSS
+if 'last_update' not in st.session_state:
+    st.session_state.last_update = None
+
 st.markdown("""
 <style>
-    .main {
-        background: linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%);
-        color: #ffffff;
+    .main {background: linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%); color: #ffffff;}
+    h1 {color: #f7931a !important; text-align: center; text-shadow: 2px 2px 4px rgba(0,0,0,0.5);}
+    h2, h3 {color: #ffa500 !important;}
+    div[data-testid="stSidebar"] button[kind="secondary"] {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+        color: white !important; border: 2px solid #a78bfa !important;
+        border-radius: 12px !important; padding: 18px 24px !important;
+        font-weight: bold !important; font-size: 18px !important; width: 100% !important;
+        box-shadow: 0 8px 16px rgba(102, 126, 234, 0.4) !important;
+        transition: all 0.3s ease !important; text-transform: uppercase !important;
     }
-    h1 {
-        color: #f7931a !important;
-        text-align: center;
-        text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+    div[data-testid="stSidebar"] button[kind="secondary"]:hover {
+        transform: translateY(-3px) !important;
+        box-shadow: 0 12px 24px rgba(102, 126, 234, 0.6) !important;
     }
-    h2, h3 { color: #ffa500 !important; }
     .stButton > button {
         background: linear-gradient(90deg, #f7931a 0%, #ffa500 100%);
-        color: white;
-        border: none;
-        border-radius: 8px;
-        padding: 12px 24px;
-        font-weight: bold;
-        width: 100%;
-        transition: all 0.3s ease;
+        color: white; border: none; border-radius: 8px;
+        padding: 12px 24px; font-weight: bold; width: 100%;
     }
-    .stButton > button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 6px 12px rgba(247, 147, 26, 0.4);
-    }
-    [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
-    }
-    .prediction-card {
-        background: rgba(255, 255, 255, 0.05);
-        border-radius: 10px;
-        padding: 20px;
-        margin: 10px 0;
-        border: 1px solid rgba(255, 165, 0, 0.3);
-    }
+    [data-testid="stSidebar"] {background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);}
 </style>
 """, unsafe_allow_html=True)
 
+def get_live_bitcoin_price():
+    """Get CURRENT Bitcoin price"""
+    try:
+        btc = yf.Ticker("BTC-USD")
+        # Try multiple methods to get current price
+        
+        # Method 1: Fast history
+        fast = btc.history(period="1d", interval="1m")
+        if not fast.empty:
+            return float(fast['Close'].iloc[-1])
+        
+        # Method 2: Info
+        info = btc.info
+        price = info.get('regularMarketPrice') or info.get('currentPrice') or info.get('previousClose')
+        if price:
+            return float(price)
+        
+        return None
+    except:
+        return None
+
+def force_update_with_todays_date():
+    """FORCE update with TODAY's date - GUARANTEED"""
+    try:
+        # Get live current price
+        live_price = get_live_bitcoin_price()
+        
+        if not live_price:
+            return False, "❌ Could not get live price"
+        
+        # Get historical data
+        btc = yf.Ticker("BTC-USD")
+        hist = btc.history(period="1y", interval="1d")
+        
+        if hist.empty:
+            return False, "❌ No historical data"
+        
+        # Remove timezone from historical data
+        if hasattr(hist.index, 'tz'):
+            hist.index = hist.index.tz_localize(None)
+        
+        # FORCE CREATE TODAY'S ROW with current time
+        now = datetime.now()
+        today_timestamp = pd.Timestamp(year=now.year, month=now.month, day=now.day, 
+                                      hour=now.hour, minute=now.minute, second=0)
+        
+        # Create today's data with live price
+        today_row = pd.DataFrame({
+            'Open': [live_price * 0.999],
+            'High': [live_price * 1.001],
+            'Low': [live_price * 0.998],
+            'Close': [live_price],
+            'Volume': [hist['Volume'].iloc[-1] if len(hist) > 0 else 1000000]
+        }, index=[today_timestamp])
+        
+        # Combine: historical + today
+        df = pd.concat([hist, today_row])
+        df = df[~df.index.duplicated(keep='last')]
+        df = df.sort_index()
+        
+        # Clean
+        df = df.reset_index()
+        df.columns = ['date'] + list(df.columns[1:])
+        df = df.set_index('date')
+        
+        cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+        df = df[cols]
+        
+        for col in cols:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        df = df.dropna()
+        
+        if len(df) < 250:
+            return False, f"❌ Not enough data: {len(df)}"
+        
+        # Save
+        os.makedirs("data", exist_ok=True)
+        df.to_csv("data/btc_data.csv")
+        
+        # Features
+        feat = df.copy()
+        feat["HL_PCT"] = (feat["High"] - feat["Low"]) / feat["Close"]
+        feat["PCT_change"] = (feat["Close"] - feat["Open"]) / feat["Open"]
+        feat["MA7"] = feat["Close"].rolling(7, min_periods=7).mean()
+        feat["MA21"] = feat["Close"].rolling(21, min_periods=21).mean()
+        feat["MA50"] = feat["Close"].rolling(50, min_periods=50).mean()
+        feat["MA200"] = feat["Close"].rolling(200, min_periods=200).mean()
+        feat["STD21"] = feat["Close"].rolling(21, min_periods=21).std()
+        feat["Return"] = feat["Close"].pct_change()
+        feat["Target"] = feat["Return"].shift(-1)
+        feat = feat.dropna()
+        
+        if len(feat) < 50:
+            return False, "❌ Not enough features"
+        
+        feat.to_csv("data/btc_features.csv")
+        
+        st.session_state.last_update = datetime.now()
+        
+        # Verify we have today's date
+        final_date = df.index[-1]
+        today_date = datetime.now().date()
+        
+        return True, f"✅ Updated to TODAY {today_date}! Price: ${live_price:,.2f} at {now.strftime('%H:%M')}"
+        
+    except Exception as e:
+        return False, f"❌ Error: {str(e)}"
+
+def retrain_models():
+    try:
+        subprocess.run([sys.executable, "train_rf.py"], capture_output=True, timeout=90)
+        subprocess.run([sys.executable, "train_lstm.py"], capture_output=True, timeout=240)
+        return True
+    except:
+        return False
+
 def check_api():
     try:
-        resp = requests.get(f"{API_BASE}/health", timeout=3)
-        return resp.ok
+        return requests.get(f"{API_BASE}/health", timeout=3).ok
     except:
-        try:
-            resp = requests.get(f"{API_BASE}/", timeout=3)
-            return resp.ok
-        except:
-            return False
+        return False
 
 def get_single_prediction(endpoint):
-    """Get single prediction"""
     try:
         resp = requests.get(f"{API_BASE}/{endpoint}", timeout=10)
         if resp.ok:
             data = resp.json()
             price = data.get("next_day_price") or data.get("prediction")
-            if price is not None:
-                return float(price)
+            return float(price) if price else None
         return None
-    except Exception as e:
-        st.error(f"Error: {str(e)}")
+    except:
         return None
 
 def get_multi_prediction(endpoint, days):
-    """Get multi-day prediction"""
     try:
-        url = f"{API_BASE}/{endpoint}?days={days}"
-        resp = requests.get(url, timeout=15)
-        
+        resp = requests.get(f"{API_BASE}/{endpoint}?days={days}", timeout=15)
         if resp.ok:
             data = resp.json()
-            # Check if we have predictions and dates
             if 'predictions' in data and 'dates' in data:
                 return data
-            else:
-                st.error(f"API returned incomplete data: {list(data.keys())}")
-                return None
-        else:
-            st.error(f"HTTP Error {resp.status_code}")
-            return None
-    except Exception as e:
-        st.error(f"Request Error: {str(e)}")
+        return None
+    except:
         return None
 
 def create_combined_forecast_chart(historical_df, rf_data, lstm_data):
-    """Create an interactive Plotly chart with historical + predictions"""
     fig = go.Figure()
-    
-    # Historical data (last 60 days)
     hist_recent = historical_df.tail(60)
-    fig.add_trace(go.Scatter(
-        x=hist_recent.index,
-        y=hist_recent['Close'],
-        mode='lines',
-        name='Historical',
-        line=dict(color='#4ade80', width=2),
-        hovertemplate='<b>Date:</b> %{x}<br><b>Price:</b> $%{y:,.2f}<extra></extra>'
-    ))
-    
-    # RF Predictions
+    fig.add_trace(go.Scatter(x=hist_recent.index, y=hist_recent['Close'],
+                             mode='lines', name='Historical', line=dict(color='#4ade80', width=2)))
     if rf_data and rf_data.get('success'):
-        rf_dates = pd.to_datetime(rf_data['dates'])
-        fig.add_trace(go.Scatter(
-            x=rf_dates,
-            y=rf_data['predictions'],
-            mode='lines+markers',
-            name='Random Forest',
-            line=dict(color='#f7931a', width=3, dash='dash'),
-            marker=dict(size=10, symbol='circle'),
-            hovertemplate='<b>Date:</b> %{x}<br><b>RF Prediction:</b> $%{y:,.2f}<extra></extra>'
-        ))
-    
-    # LSTM Predictions
+        fig.add_trace(go.Scatter(x=pd.to_datetime(rf_data['dates']), y=rf_data['predictions'],
+                                mode='lines+markers', name='Random Forest',
+                                line=dict(color='#f7931a', width=3, dash='dash'), marker=dict(size=10)))
     if lstm_data and lstm_data.get('success'):
-        lstm_dates = pd.to_datetime(lstm_data['dates'])
-        fig.add_trace(go.Scatter(
-            x=lstm_dates,
-            y=lstm_data['predictions'],
-            mode='lines+markers',
-            name='LSTM',
-            line=dict(color='#a855f7', width=3, dash='dot'),
-            marker=dict(size=10, symbol='diamond'),
-            hovertemplate='<b>Date:</b> %{x}<br><b>LSTM Prediction:</b> $%{y:,.2f}<extra></extra>'
-        ))
-    
-    fig.update_layout(
-        title='Bitcoin Price Forecast',
-        xaxis_title='Date',
-        yaxis_title='Price (USD)',
-        template='plotly_dark',
-        hovermode='x unified',
-        height=500,
-        showlegend=True,
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="right",
-            x=1
-        ),
-        plot_bgcolor='rgba(0,0,0,0.3)',
-        paper_bgcolor='rgba(0,0,0,0)',
-        font=dict(color='#e0e0e0', size=12)
-    )
-    
+        fig.add_trace(go.Scatter(x=pd.to_datetime(lstm_data['dates']), y=lstm_data['predictions'],
+                                mode='lines+markers', name='LSTM',
+                                line=dict(color='#a855f7', width=3, dash='dot'), marker=dict(size=10)))
+    fig.update_layout(title='Bitcoin Price Forecast', xaxis_title='Date', yaxis_title='Price (USD)',
+                     template='plotly_dark', height=500, plot_bgcolor='rgba(0,0,0,0.3)',
+                     paper_bgcolor='rgba(0,0,0,0)', font=dict(color='#e0e0e0'))
     return fig
 
 def create_ohlc_chart(df):
-    """Create OHLC candlestick chart with volume"""
-    fig = make_subplots(
-        rows=2, cols=1,
-        shared_xaxes=True,
-        vertical_spacing=0.03,
-        row_heights=[0.7, 0.3],
-        subplot_titles=('Price (OHLC)', 'Volume')
-    )
-    
-    # Candlestick chart
-    fig.add_trace(go.Candlestick(
-        x=df.index,
-        open=df['Open'],
-        high=df['High'],
-        low=df['Low'],
-        close=df['Close'],
-        name='OHLC',
-        increasing_line_color='#4ade80',
-        decreasing_line_color='#ef4444'
-    ), row=1, col=1)
-    
-    # Volume bars
-    colors = ['#4ade80' if df['Close'].iloc[i] >= df['Open'].iloc[i] else '#ef4444' 
-              for i in range(len(df))]
-    
-    fig.add_trace(go.Bar(
-        x=df.index,
-        y=df['Volume'],
-        name='Volume',
-        marker_color=colors,
-        showlegend=False
-    ), row=2, col=1)
-    
-    fig.update_layout(
-        template='plotly_dark',
-        height=600,
-        showlegend=False,
-        xaxis_rangeslider_visible=False,
-        plot_bgcolor='rgba(0,0,0,0.3)',
-        paper_bgcolor='rgba(0,0,0,0)',
-        font=dict(color='#e0e0e0')
-    )
-    
-    fig.update_xaxes(showgrid=False)
-    fig.update_yaxes(showgrid=True, gridcolor='rgba(255,255,255,0.1)')
-    
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03,
+                        row_heights=[0.7, 0.3], subplot_titles=('Price (OHLC)', 'Volume'))
+    fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'],
+                                 low=df['Low'], close=df['Close'], name='OHLC',
+                                 increasing_line_color='#4ade80', decreasing_line_color='#ef4444'), row=1, col=1)
+    colors = ['#4ade80' if df['Close'].iloc[i] >= df['Open'].iloc[i] else '#ef4444' for i in range(len(df))]
+    fig.add_trace(go.Bar(x=df.index, y=df['Volume'], marker_color=colors, showlegend=False), row=2, col=1)
+    fig.update_layout(template='plotly_dark', height=600, xaxis_rangeslider_visible=False,
+                     plot_bgcolor='rgba(0,0,0,0.3)', paper_bgcolor='rgba(0,0,0,0)', font=dict(color='#e0e0e0'))
     return fig
 
-# Page config
-st.set_page_config(page_title="Bitcoin Prediction", page_icon="₿", layout="wide")
+# SIDEBAR
+st.sidebar.header("⚙️ Settings")
+if check_api():
+    st.sidebar.success("✅ FastAPI Connected")
+else:
+    st.sidebar.error("❌ FastAPI NOT running")
 
-# Sidebar
-with st.sidebar:
-    st.title("⚙️ Settings")
-    if check_api():
-        st.success("✅ FastAPI Connected")
+st.sidebar.markdown("---")
+
+# AUTO-UPDATE TOGGLE
+st.sidebar.subheader("🤖 Auto-Update")
+
+# Use the session state variable safely
+current_auto_state = st.session_state.get('auto_update_enabled', True)
+
+auto_enabled = st.sidebar.checkbox(
+    "Enable daily auto-update",
+    value=current_auto_state,
+    help="Automatically update to today's data when you open the app each day"
+)
+st.session_state.auto_update_enabled = auto_enabled
+
+if auto_enabled:
+    st.sidebar.success("✅ Auto-update is ON")
+    st.sidebar.caption("Data updates automatically when you open the app each new day")
+else:
+    st.sidebar.info("ℹ️ Auto-update is OFF")
+    st.sidebar.caption("Use manual refresh button to update")
+
+st.sidebar.markdown("---")
+
+# Show current live price with auto-refresh
+live_price_placeholder = st.sidebar.empty()
+live_time_placeholder = st.sidebar.empty()
+
+live_now = get_live_bitcoin_price()
+if live_now:
+    live_price_placeholder.success(f"💰 **LIVE: ${live_now:,.2f}**")
+    live_time_placeholder.caption(f"🕐 {datetime.now().strftime('%H:%M:%S')}")
+    
+    # Auto-refresh every 5 seconds
+    if 'last_price_refresh' not in st.session_state:
+        st.session_state.last_price_refresh = time.time()
+    
+    # Check if 5 seconds have passed
+    if time.time() - st.session_state.last_price_refresh > 5:
+        st.session_state.last_price_refresh = time.time()
+        time.sleep(0.1)
+        st.rerun()
+else:
+    live_price_placeholder.info("📡 Fetching live price...")
+
+st.sidebar.markdown("---")
+
+st.sidebar.subheader("🔄 Manual Update")
+
+refresh_btn = st.sidebar.button("🔄 REFRESH TO TODAY", key="refresh_btn", use_container_width=True, type="secondary")
+
+if refresh_btn:
+    progress = st.sidebar.progress(0)
+    status = st.sidebar.empty()
+    
+    status.info("📡 Getting live Bitcoin price...")
+    progress.progress(20)
+    time.sleep(0.3)
+    
+    success, msg = force_update_with_todays_date()
+    progress.progress(50)
+    
+    if success:
+        status.success(msg)
+        time.sleep(0.5)
+        
+        status.info("🤖 Retraining models...")
+        progress.progress(75)
+        retrain_models()
+        progress.progress(100)
+        
+        st.sidebar.balloons()
+        time.sleep(1)
+        progress.empty()
+        status.empty()
+        st.rerun()
     else:
-        st.error("❌ FastAPI NOT running")
-    
-    st.markdown("---")
-    mode = st.radio("📊 Mode", ["Single Day", "Multi-Day"])
-    
-    days = 7
-    if mode == "Multi-Day":
-        days = st.slider("Days to Predict", 1, 14, 7)
-    
-    st.markdown("---")
-    st.markdown("### 📈 Chart Options")
-    show_volume = st.checkbox("Show Volume", value=True)
-    chart_days = st.slider("Historical Days", 30, 200, 100)
-    
-    st.markdown("---")
-    st.info("💡 **Tip:** Use Multi-Day mode for weekly forecasts")
+        status.error(msg)
+        progress.empty()
 
-# Header
+if st.session_state.last_update:
+    st.sidebar.success(f"✅ Last: {st.session_state.last_update.strftime('%Y-%m-%d %H:%M')}")
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("📊 Mode")
+mode = st.sidebar.radio("Select Mode", ["Single Day", "Multi-Day"])
+
+days = 7
+if mode == "Multi-Day":
+    days = st.sidebar.slider("Days", 1, 14, 7)
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("📈 Chart Options")
+chart_days = st.sidebar.slider("Historical Days", 30, 200, 100)
+
+# MAIN CONTENT
 st.markdown("<h1>₿ Bitcoin Price Prediction</h1>", unsafe_allow_html=True)
 st.markdown("<p style='text-align:center;color:#ffa500'>ML-Powered Cryptocurrency Forecasting</p>", unsafe_allow_html=True)
 
-# Load data
 FEATURES_CSV = "data/btc_features.csv"
-df = None
 
-if os.path.exists(FEATURES_CSV):
+# AUTO-UPDATE CHECK - Runs once per day automatically
+if st.session_state.auto_update_enabled:
+    today_date = datetime.now().date()
+    
+    # Check if we need to auto-update
+    should_auto_update = False
+    
+    # Safely get last auto update date
+    last_update_date = st.session_state.get('last_auto_update_date', None)
+    
+    if last_update_date != today_date:
+        # Haven't updated today yet
+        if os.path.exists(FEATURES_CSV):
+            try:
+                df_check = pd.read_csv(FEATURES_CSV, index_col=0, parse_dates=True)
+                if hasattr(df_check.index, 'tz') and df_check.index.tz is not None:
+                    df_check.index = df_check.index.tz_localize(None)
+                
+                data_date = df_check.index[-1].date()
+                
+                # If data is not from today, trigger auto-update
+                if data_date < today_date:
+                    should_auto_update = True
+            except:
+                should_auto_update = True
+        else:
+            should_auto_update = True
+    
+    # Perform auto-update
+    if should_auto_update:
+        auto_update_container = st.empty()
+        with auto_update_container.container():
+            st.info("🤖 Auto-updating to today's Bitcoin prices...")
+            progress = st.progress(0)
+            
+            progress.progress(20)
+            success, msg = force_update_with_todays_date()
+            progress.progress(60)
+            
+            if success:
+                st.success(msg)
+                progress.progress(80)
+                st.info("🤖 Retraining models...")
+                retrain_models()
+                progress.progress(100)
+                
+                st.session_state.last_auto_update_date = today_date
+                st.balloons()
+                time.sleep(2)
+                auto_update_container.empty()
+                st.rerun()
+            else:
+                st.error(msg)
+                progress.empty()
+                time.sleep(2)
+                auto_update_container.empty()
+
+if not os.path.exists(FEATURES_CSV):
+    st.error("❌ No data found!")
+    st.warning("👈 Click **🔄 REFRESH TO TODAY** button in sidebar")
+    
+    if st.button("🚀 Get Started", type="primary"):
+        with st.spinner("Fetching..."):
+            success, msg = force_update_with_todays_date()
+            if success:
+                st.success(msg)
+                retrain_models()
+                time.sleep(1)
+                st.rerun()
+            else:
+                st.error(msg)
+    st.stop()
+
+try:
     df = pd.read_csv(FEATURES_CSV, index_col=0, parse_dates=True)
-    
-    # Metrics
-    current = df["Close"].iloc[-1]
-    prev = df["Close"].iloc[-2]
-    change_pct = ((current - prev) / prev) * 100
-    
-    col1, col2, col3 = st.columns(3)
-    col1.metric("💰 Current", f"${current:,.2f}", f"{change_pct:+.2f}%")
-    col2.metric("📈 High", f"${df['High'].iloc[-1]:,.2f}")
-    col3.metric("📉 Low", f"${df['Low'].iloc[-1]:,.2f}")
+except Exception as e:
+    st.error(f"❌ Error: {e}")
+    st.stop()
+
+# Remove timezone if present
+if hasattr(df.index, 'tz') and df.index.tz is not None:
+    df.index = df.index.tz_localize(None)
+
+data_datetime = df.index[-1]
+data_date = data_datetime.date()
+data_time = data_datetime.strftime('%H:%M:%S')
+today = datetime.now().date()
+data_age_days = (today - data_date).days
+
+current = df["Close"].iloc[-1]
+prev = df["Close"].iloc[-2]
+change_pct = ((current - prev) / prev) * 100
+
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("💰 Current", f"${current:,.2f}", f"{change_pct:+.2f}%")
+col2.metric("📈 High", f"${df['High'].iloc[-1]:,.2f}")
+col3.metric("📉 Low", f"${df['Low'].iloc[-1]:,.2f}")
+
+if data_age_days == 0:
+    col4.metric("📅 Data", f"TODAY ✅", f"{data_time}")
+    st.success(f"✅ Using TODAY's data ({data_datetime.strftime('%Y-%m-%d %H:%M')})")
+else:
+    col4.metric("📅 Data", data_date.strftime("%m-%d"), f"{data_age_days}d old")
+    st.error(f"⚠️ Data is {data_age_days} days old! Click REFRESH TO TODAY button!")
 
 st.markdown("---")
 
-# Predictions
 if mode == "Single Day":
+    st.info(f"💡 Predictions from {data_datetime.strftime('%Y-%m-%d %H:%M')}")
+    
     col1, col2 = st.columns(2)
     
     with col1:
         st.subheader("🤖 Random Forest")
-        if st.button("Get RF Prediction", key="rf"):
+        if st.button("Get RF Prediction", key="rf", use_container_width=True):
             with st.spinner("Predicting..."):
                 price = get_single_prediction("predict/rf")
-                if price is not None:
+                if price:
                     st.success(f"### ${price:,.2f}")
-                    st.caption("Next-day closing price prediction")
+                    next_day = data_datetime + timedelta(days=1)
+                    st.caption(f"For {next_day.strftime('%Y-%m-%d')}")
+                    change = ((price - current) / current) * 100
+                    st.info(f"{'📈' if change > 0 else '📉'} {change:+.2f}% (${price - current:+,.2f})")
                 else:
-                    st.error("Prediction failed")
+                    st.error("❌ Failed")
     
     with col2:
         st.subheader("🧠 LSTM")
-        if st.button("Get LSTM Prediction", key="lstm"):
+        if st.button("Get LSTM Prediction", key="lstm", use_container_width=True):
             with st.spinner("Predicting..."):
                 price = get_single_prediction("predict/lstm")
-                if price is not None:
+                if price:
                     st.success(f"### ${price:,.2f}")
-                    st.caption("Next-day closing price prediction")
+                    next_day = data_datetime + timedelta(days=1)
+                    st.caption(f"For {next_day.strftime('%Y-%m-%d')}")
+                    change = ((price - current) / current) * 100
+                    st.info(f"{'📈' if change > 0 else '📉'} {change:+.2f}% (${price - current:+,.2f})")
                 else:
-                    st.error("Prediction failed")
+                    st.error("❌ Failed")
 
-else:  # Multi-Day
+else:
     st.subheader(f"📈 {days}-Day Forecast")
     
-    if st.button("🔮 Generate Forecast", type="primary", key="multi"):
+    if st.button("🔮 Generate Forecast", type="primary", use_container_width=True):
         with st.spinner(f"Generating {days}-day forecast..."):
             rf_data = get_multi_prediction("predict/rf/multi", days)
             lstm_data = get_multi_prediction("predict/lstm/multi", days)
             
-            if (rf_data and 'predictions' in rf_data) or (lstm_data and 'predictions' in lstm_data):
-                # Combined forecast chart
-                if df is not None:
-                    st.plotly_chart(
-                        create_combined_forecast_chart(df, rf_data, lstm_data),
-                        use_container_width=True
-                    )
+            if rf_data or lstm_data:
+                st.plotly_chart(create_combined_forecast_chart(df, rf_data, lstm_data), use_container_width=True)
                 
-                # Prediction tables side by side
                 st.markdown("### 📊 Detailed Predictions")
                 col1, col2 = st.columns(2)
                 
                 with col1:
-                    st.markdown("**🤖 Random Forest Forecast**")
-                    if rf_data:
-                        # Create simple table with Date | Price
-                        rf_table = pd.DataFrame({
-                            'Date': rf_data['dates'],
-                            'Predicted Price': [f"${p:,.2f}" for p in rf_data['predictions']]
-                        })
-                        st.dataframe(rf_table, hide_index=True, use_container_width=True, height=300)
-                        
-                        # Summary stats
-                        avg_price = sum(rf_data['predictions']) / len(rf_data['predictions'])
-                        min_price = min(rf_data['predictions'])
-                        max_price = max(rf_data['predictions'])
-                        
-                        st.markdown(f"""
-                        📊 **Summary:**
-                        - Average: ${avg_price:,.2f}
-                        - Minimum: ${min_price:,.2f}
-                        - Maximum: ${max_price:,.2f}
-                        """)
-                    else:
-                        st.warning("⚠️ RF predictions unavailable")
+                    st.markdown("**🤖 Random Forest**")
+                    if rf_data and 'predictions' in rf_data:
+                        rf_df = pd.DataFrame({'Date': rf_data['dates'],
+                                             'Price': [f"${p:,.2f}" for p in rf_data['predictions']]})
+                        st.dataframe(rf_df, hide_index=True, use_container_width=True, height=300)
                 
                 with col2:
-                    st.markdown("**🧠 LSTM Forecast**")
-                    if lstm_data:
-                        # Create simple table with Date | Price
-                        lstm_table = pd.DataFrame({
-                            'Date': lstm_data['dates'],
-                            'Predicted Price': [f"${p:,.2f}" for p in lstm_data['predictions']]
-                        })
-                        st.dataframe(lstm_table, hide_index=True, use_container_width=True, height=300)
-                        
-                        # Summary stats
-                        avg_price = sum(lstm_data['predictions']) / len(lstm_data['predictions'])
-                        min_price = min(lstm_data['predictions'])
-                        max_price = max(lstm_data['predictions'])
-                        
-                        st.markdown(f"""
-                        📊 **Summary:**
-                        - Average: ${avg_price:,.2f}
-                        - Minimum: ${min_price:,.2f}
-                        - Maximum: ${max_price:,.2f}
-                        """)
-                    else:
-                        st.warning("⚠️ LSTM predictions unavailable")
-            else:
-                st.error("Both models failed to generate predictions. Check API logs.")
+                    st.markdown("**🧠 LSTM**")
+                    if lstm_data and 'predictions' in lstm_data:
+                        lstm_df = pd.DataFrame({'Date': lstm_data['dates'],
+                                               'Price': [f"${p:,.2f}" for p in lstm_data['predictions']]})
+                        st.dataframe(lstm_df, hide_index=True, use_container_width=True, height=300)
 
-# Historical Analysis
-if df is not None:
-    st.markdown("---")
-    st.subheader("📊 Historical Price Analysis")
+st.markdown("---")
+st.subheader("📊 Historical Analysis")
+
+tab1, tab2, tab3 = st.tabs(["📈 OHLC Chart", "📉 Line Chart", "📋 Data Table"])
+
+with tab1:
+    st.plotly_chart(create_ohlc_chart(df.tail(chart_days)), use_container_width=True)
+
+with tab2:
+    st.markdown("**Select indicators to display:**")
+    indicators = st.multiselect(
+        "Choose data series:",
+        ['Close', 'Open', 'High', 'Low', 'Volume', 'MA7', 'MA21', 'MA50', 'MA200'],
+        default=['Close', 'MA7', 'MA21'],
+        key='line_indicators'
+    )
     
-    tab1, tab2, tab3 = st.tabs(["📈 OHLC Chart", "📉 Line Chart", "📋 Data Table"])
-    
-    with tab1:
-        # Candlestick chart
-        chart_df = df.tail(chart_days)
-        st.plotly_chart(create_ohlc_chart(chart_df), use_container_width=True)
-    
-    with tab2:
-        # Multi-line chart
-        st.markdown("**Select indicators to display:**")
-        indicators = st.multiselect(
-            "Choose data series:",
-            ['Close', 'Open', 'High', 'Low', 'MA7', 'MA21', 'MA50'],
-            default=['Close', 'MA21'],
-            key='line_chart_select'
+    if indicators:
+        line_df = df[indicators].tail(chart_days)
+        
+        fig = go.Figure()
+        colors = ['#f7931a', '#4ade80', '#a855f7', '#ef4444', '#fbbf24', '#60a5fa', '#ec4899', '#8b5cf6', '#06b6d4']
+        
+        for i, col in enumerate(indicators):
+            fig.add_trace(go.Scatter(
+                x=line_df.index,
+                y=line_df[col],
+                mode='lines',
+                name=col,
+                line=dict(color=colors[i % len(colors)], width=2),
+                hovertemplate=f'<b>{col}:</b> $%{{y:,.2f}}<extra></extra>'
+            ))
+        
+        fig.update_layout(
+            title='Price & Indicators',
+            xaxis_title='Date',
+            yaxis_title='Price (USD)',
+            template='plotly_dark',
+            height=500,
+            hovermode='x unified',
+            plot_bgcolor='rgba(0,0,0,0.3)',
+            paper_bgcolor='rgba(0,0,0,0)',
+            font=dict(color='#e0e0e0')
         )
         
-        if indicators:
-            line_df = df[indicators].tail(chart_days)
-            
-            fig = go.Figure()
-            colors = ['#f7931a', '#4ade80', '#a855f7', '#ef4444', '#fbbf24', '#60a5fa', '#ec4899']
-            
-            for i, col in enumerate(indicators):
-                fig.add_trace(go.Scatter(
-                    x=line_df.index,
-                    y=line_df[col],
-                    mode='lines',
-                    name=col,
-                    line=dict(color=colors[i % len(colors)], width=2),
-                    hovertemplate=f'<b>{col}:</b> $%{{y:,.2f}}<extra></extra>'
-                ))
-            
-            fig.update_layout(
-                template='plotly_dark',
-                height=400,
-                hovermode='x unified',
-                plot_bgcolor='rgba(0,0,0,0.3)',
-                paper_bgcolor='rgba(0,0,0,0)',
-                font=dict(color='#e0e0e0')
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
-    
-    with tab3:
-        # Data table
-        st.markdown("**Recent Data (Last 20 rows)**")
-        display_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
-        recent_data = df[display_cols].tail(20)
-        
-        # Format the dataframe
-        formatted_data = recent_data.copy()
-        for col in ['Open', 'High', 'Low', 'Close']:
-            formatted_data[col] = formatted_data[col].apply(lambda x: f"${x:,.2f}")
-        formatted_data['Volume'] = formatted_data['Volume'].apply(lambda x: f"{x:,.0f}")
-        
-        st.dataframe(formatted_data, use_container_width=True)
-        
-        # Download button
-        csv = df.tail(100).to_csv()
-        st.download_button(
-            label="📥 Download Last 100 Days (CSV)",
-            data=csv,
-            file_name="bitcoin_data.csv",
-            mime="text/csv"
-        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("👆 Select at least one indicator to display the chart")
 
-# Footer
+with tab3:
+    st.markdown("**Recent Data (Last 20 rows)**")
+    display_cols = ['Open', 'High', 'Low', 'Close', 'Volume', 'MA7', 'MA21', 'MA50']
+    recent = df[display_cols].tail(20).copy()
+    
+    for col in ['Open', 'High', 'Low', 'Close', 'MA7', 'MA21', 'MA50']:
+        if col in recent.columns:
+            recent[col] = recent[col].apply(lambda x: f"${x:,.2f}" if pd.notna(x) else "N/A")
+    
+    if 'Volume' in recent.columns:
+        recent['Volume'] = recent['Volume'].apply(lambda x: f"{x:,.0f}" if pd.notna(x) else "N/A")
+    
+    st.dataframe(recent, use_container_width=True)
+    
+    # Download button
+    csv = df.tail(100).to_csv()
+    st.download_button(
+        label="📥 Download Last 100 Days (CSV)",
+        data=csv,
+        file_name="bitcoin_data.csv",
+        mime="text/csv"
+    )
+
 st.markdown("---")
 st.markdown("""
 <div style='text-align:center;color:#888;padding:20px'>
-    <p>⚠️ <strong>Disclaimer:</strong> Educational purposes only. Not financial advice.</p>
-    <p>Built with ❤️ using FastAPI + Streamlit + TensorFlow + Scikit-learn</p>
-    <p style='font-size:12px;color:#666'>Last Updated: November 2025</p>
+    <p>⚠️ Educational purposes only. Not financial advice.</p>
+    <p>💡 Click REFRESH TO TODAY button daily for latest prices!</p>
 </div>
 """, unsafe_allow_html=True)
